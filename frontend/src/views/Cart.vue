@@ -77,22 +77,39 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from "vue";
-import axios from "axios"; // Đảm bảo đã cài axios
+import { ref, computed, onMounted } from "vue";
+import axios from "axios"; 
 import { useRouter } from "vue-router";
 
+// --- CẤU HÌNH ---
+const MAX_BOOKS_ALLOWED = 3; // Giới hạn số sách tối đa
+const API_URL = "http://localhost:3000/api/yeucaumuonsach";
+
+// --- STATE ---
 const cartItems = ref([]);
 const currentUser = ref({});
 const router = useRouter();
 
+// --- COMPUTED (Tính toán tự động) ---
+// Tính tổng số lượng sách đang có trong giỏ
+const totalQuantity = computed(() => {
+  return cartItems.value.reduce((sum, item) => sum + (Number(item.SoLuong) || 1), 0);
+});
+
+// --- HELPER FUNCTIONS ---
+const updateCartStorage = () => {
+  localStorage.setItem("cart", JSON.stringify(cartItems.value));
+};
+
+// --- LIFECYCLE ---
 onMounted(() => {
-  // 1. Lấy sách từ LocalStorage
-  const storedCart = localStorage.getItem("cart"); // Tên key localStorage của bạn
+  // 1. Lấy sách
+  const storedCart = localStorage.getItem("cart");
   if (storedCart) {
     cartItems.value = JSON.parse(storedCart);
   }
 
-  // 2. Lấy user đăng nhập (Giả sử bạn lưu user info trong localStorage khi login)
+  // 2. Lấy User
   const storedUser = localStorage.getItem("user"); 
   if (storedUser) {
     currentUser.value = JSON.parse(storedUser);
@@ -101,57 +118,83 @@ onMounted(() => {
     router.push("/dangnhap");
   }
 });
+
+// --- ACTIONS (Tăng/Giảm/Xóa) ---
 const increaseQty = (index) => {
-  // Nếu chưa có thuộc tính SoLuong thì gán = 1, sau đó cộng thêm
+  // Đảm bảo số lượng là số
   if (!cartItems.value[index].SoLuong) {
     cartItems.value[index].SoLuong = 1;
   }
-  cartItems.value[index].SoLuong++;
   
-  // Lưu lại vào LocalStorage (nếu cần)
-  localStorage.setItem("cart", JSON.stringify(cartItems.value));
+  // Kiểm tra nóng: Nếu tăng lên mà vượt quá 3 thì chặn luôn (UX tốt hơn)
+  if (totalQuantity.value >= MAX_BOOKS_ALLOWED) {
+    alert(`Bạn chỉ được mượn tối đa ${MAX_BOOKS_ALLOWED} quyển sách!`);
+    return;
+  }
+
+  cartItems.value[index].SoLuong++;
+  updateCartStorage();
 };
 
-// Hàm giảm số lượng
 const decreaseQty = (index) => {
   if (cartItems.value[index].SoLuong > 1) {
     cartItems.value[index].SoLuong--;
   } else {
-    // Nếu giảm về 0 thì hỏi xóa luôn (tùy chọn)
-    if(confirm('Bạn muốn xóa sách này?')) {
+    if(confirm('Bạn muốn xóa sách này khỏi giỏ?')) {
         removeItem(index);
+        return; // Đã xóa xong thì return luôn
     }
   }
-  localStorage.setItem("cart", JSON.stringify(cartItems.value));
+  updateCartStorage();
 };
+
 const removeItem = (index) => {
   cartItems.value.splice(index, 1);
-  localStorage.setItem("cart", JSON.stringify(cartItems.value));
+  updateCartStorage();
 };
 
+// --- SUBMIT (Gửi yêu cầu) ---
 const submitRequest = async () => {
-  if (cartItems.value.length === 0) return;
+  // 1. Validate Giỏ hàng trống
+  if (cartItems.value.length === 0) {
+    alert("Giỏ hàng đang trống!");
+    return;
+  }
+
+  // 2. Validate Tổng số lượng (Chốt chặn quan trọng nhất)
+  if (totalQuantity.value > MAX_BOOKS_ALLOWED) {
+    alert(`LỖI: Tổng số lượng sách là ${totalQuantity.value}. Bạn chỉ được mượn tối đa ${MAX_BOOKS_ALLOWED} quyển.`);
+    return; // Dừng ngay lập tức
+  }
 
   try {
-    // Chuẩn bị payload đúng chuẩn Backend yêu cầu
+    // 3. Chuẩn bị Payload (Thêm SoLuong vào để Backend lưu đúng)
     const payload = {
-      MaDocGia: currentUser.value.maDocGia, // Lấy mã độc giả (String)
+      // Lưu ý: Kiểm tra lại backend của bạn cần 'MaDocGia' hay '_id'
+      MaDocGia: currentUser.value._id || currentUser.value.maDocGia, 
       DanhSachSach: cartItems.value.map(book => ({
         MaSach: book.MaSach,
-        TenSach: book.TenSach
-      }))
+        TenSach: book.TenSach,
+        SoLuong: Number(book.SoLuong || 1) // QUAN TRỌNG: Phải gửi kèm số lượng
+      })),
+      NgayHenTra: new Date(new Date().setDate(new Date().getDate() + 7)), // Mặc định +7 ngày
+      TrangThai: "DangCho"
     };
 
-    await axios.post("http://localhost:3000/api/yeucaumuonsach", payload);
+    // 4. Gọi API
+    await axios.post(API_URL, payload);
     
     alert("Gửi yêu cầu thành công!");
-    // Xóa giỏ hàng sau khi gửi thành công
+    
+    // 5. Dọn dẹp sau khi thành công
     localStorage.removeItem("cart");
     cartItems.value = [];
-    router.push("/"); // Quay về trang chủ
+    router.push("/"); 
+
   } catch (error) {
     console.error(error);
-    alert("Lỗi khi gửi yêu cầu!");
+    const msg = error.response?.data?.message || "Lỗi khi gửi yêu cầu!";
+    alert(msg);
   }
 };
 </script>
